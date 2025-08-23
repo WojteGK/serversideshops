@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "serversideshops",
+  "version": "${version}",
+  "name": "Server-side shops",
+  "description": "Server-side economy with /shop, /balance, /buy, /sell, /pay and a chest-based shop GUI.",
+  "authors": [
+    "Nevarious"
+  ],
+  "contact": {
+    "sources": "https://github.com/WojteGK/serversideshops",
+    "issues": "https://github.com/WojteGK/serversideshops/issues"
+  },
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.nevarious.serversideshops.ServersideShopsMod"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.14.0",
+    "fabric-api": "*",
+    "minecraft": ">=1.21.0",
+    "java": ">=21"
+  }
+}
