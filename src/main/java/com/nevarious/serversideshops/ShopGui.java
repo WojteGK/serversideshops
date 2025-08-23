@@ -24,8 +24,37 @@ public class ShopGui {
     private static final int ROWS = 6;
     private static final int SIZE = ROWS * 9;
 
+    // ----- Public API -----
+
     public static void openCategories(ServerPlayerEntity player) {
         Inventory inv = new SimpleInventory(SIZE);
+        // Open once with a stable title to avoid mouse recenter
+        player.openHandledScreen(new SimpleNamedScreenHandlerFactory((syncId, playerInv, p) ->
+                new ShopScreenHandler(ScreenHandlerType.GENERIC_9X6, syncId, playerInv, inv, ROWS), Text.literal("Shop")));
+        // Initialize session and fill contents
+        ServersideShopsMod.SESSIONS.put(player.getUuid(),
+                new ShopSession(player.getUuid(), null, 0, ShopSession.Mode.BUY));
+        fillCategories(inv);
+        player.currentScreenHandler.sendContentUpdates();
+    }
+
+    public static void openCategory(ServerPlayerEntity player, String categoryId, int page, ShopSession.Mode mode) {
+        // Keep the same handler/screen; just fill it
+        if (!(player.currentScreenHandler instanceof ShopScreenHandler ssh)) {
+            openCategories(player); // fallback if somehow not open
+        }
+        ServersideShopsMod.SESSIONS.put(player.getUuid(),
+                new ShopSession(player.getUuid(), categoryId, page, mode));
+        Inventory inv = ((ShopScreenHandler) player.currentScreenHandler).menuInventory;
+        fillCategory(inv, categoryId, page, mode);
+        player.currentScreenHandler.sendContentUpdates();
+    }
+
+    // ----- Fillers (mutate the existing inventory) -----
+
+    private static void fillCategories(Inventory inv) {
+        // clear
+        for (int s = 0; s < SIZE; s++) inv.setStack(s, ItemStack.EMPTY);
 
         int i = 0;
         for (ShopConfig.Category cat : ServersideShopsMod.CONFIG.categories) {
@@ -35,22 +64,18 @@ public class ShopGui {
             stack.set(DataComponentTypes.CUSTOM_NAME, Text.literal("Category: " + cat.name));
             inv.setStack(i++, stack);
         }
-
+        // nav & hint row
         inv.setStack(53, navStack("Close"));
-        openInventory(player, inv, Text.literal("Shop Categories"));
-        ServersideShopsMod.SESSIONS.put(player.getUuid(),
-                new ShopSession(player.getUuid(), null, 0, ShopSession.Mode.BUY));
     }
 
-    public static void openCategory(ServerPlayerEntity player, String categoryId, int page, ShopSession.Mode mode) {
+    private static void fillCategory(Inventory inv, String categoryId, int page, ShopSession.Mode mode) {
+        // clear
+        for (int s = 0; s < SIZE; s++) inv.setStack(s, ItemStack.EMPTY);
+
         ShopConfig.Category cat = ServersideShopsMod.CONFIG.categories.stream()
                 .filter(c -> Objects.equals(c.id, categoryId)).findFirst().orElse(null);
-        if (cat == null) {
-            player.sendMessage(Text.literal("Unknown category: " + categoryId), false);
-            return;
-        }
+        if (cat == null) return;
 
-        Inventory inv = new SimpleInventory(SIZE);
         List<String> ids = cat.items != null ? cat.items : new ArrayList<>();
         int start = page * 45;
         int end = Math.min(ids.size(), start + 45);
@@ -69,19 +94,11 @@ public class ShopGui {
             inv.setStack(slot++, stack);
         }
 
+        // Nav row
         inv.setStack(45, navStack("« Prev"));
         inv.setStack(46, navStack("Back"));
         inv.setStack(52, navStack(mode == ShopSession.Mode.BUY ? "Mode: BUY" : "Mode: SELL"));
         inv.setStack(53, navStack("Next »"));
-
-        openInventory(player, inv, Text.literal(cat.name + " (" + mode + ") p." + (page + 1)));
-        ServersideShopsMod.SESSIONS.put(player.getUuid(),
-                new ShopSession(player.getUuid(), categoryId, page, mode));
-    }
-
-    private static void openInventory(ServerPlayerEntity player, Inventory inv, Text title) {
-        player.openHandledScreen(new SimpleNamedScreenHandlerFactory((syncId, playerInv, p) ->
-                new ShopScreenHandler(ScreenHandlerType.GENERIC_9X6, syncId, playerInv, inv, ROWS), title));
     }
 
     private static ItemStack navStack(String name) {
@@ -90,9 +107,14 @@ public class ShopGui {
         return paper;
     }
 
+    // ----- ScreenHandler that keeps a reference to the menu inventory -----
+
     public static class ShopScreenHandler extends GenericContainerScreenHandler {
+        final Inventory menuInventory;
+
         public ShopScreenHandler(ScreenHandlerType<?> type, int syncId, PlayerInventory playerInventory, Inventory inventory, int rows) {
             super(type, syncId, playerInventory, inventory, rows);
+            this.menuInventory = inventory;
         }
 
         @Override
@@ -105,7 +127,7 @@ public class ShopGui {
                 ItemStack clicked = this.getSlot(slotIndex).getStack();
                 if (!clicked.isEmpty()) {
                     String name = clicked.getName().getString();
-                    ShopSession session = ServersideShopsMod.SESSIONS.get(sp.getUuid());
+                    ShopSession s = ServersideShopsMod.SESSIONS.get(sp.getUuid());
 
                     if (name.startsWith("Category: ")) {
                         String catName = name.substring("Category: ".length());
@@ -114,30 +136,43 @@ public class ShopGui {
                             if (c.name.equals(catName)) { catId = c.id; break; }
                         }
                         if (catId != null) {
-                            ShopGui.openCategory(sp, catId, 0, ShopSession.Mode.BUY);
+                            // mutate same inventory (no reopen)
+                            ServersideShopsMod.SESSIONS.put(sp.getUuid(), new ShopSession(sp.getUuid(), catId, 0, ShopSession.Mode.BUY));
+                            fillCategory(menuInventory, catId, 0, ShopSession.Mode.BUY);
+                            this.sendContentUpdates();
                         }
                         return;
                     }
-                    if ("Back".equals(name)) { ShopGui.openCategories(sp); return; }
+                    if ("Back".equals(name)) {
+                        ServersideShopsMod.SESSIONS.put(sp.getUuid(), new ShopSession(sp.getUuid(), null, 0, ShopSession.Mode.BUY));
+                        fillCategories(menuInventory);
+                        this.sendContentUpdates();
+                        return;
+                    }
                     if ("« Prev".equals(name)) {
-                        ShopSession s = ServersideShopsMod.SESSIONS.get(sp.getUuid());
                         if (s != null && s.category != null && s.page > 0) {
-                            ShopGui.openCategory(sp, s.category, s.page - 1, s.mode);
+                            s.page -= 1;
+                            ServersideShopsMod.SESSIONS.put(sp.getUuid(), s);
+                            fillCategory(menuInventory, s.category, s.page, s.mode);
+                            this.sendContentUpdates();
                         }
                         return;
                     }
                     if ("Next »".equals(name)) {
-                        ShopSession s = ServersideShopsMod.SESSIONS.get(sp.getUuid());
                         if (s != null && s.category != null) {
-                            ShopGui.openCategory(sp, s.category, s.page + 1, s.mode);
+                            s.page += 1;
+                            ServersideShopsMod.SESSIONS.put(sp.getUuid(), s);
+                            fillCategory(menuInventory, s.category, s.page, s.mode);
+                            this.sendContentUpdates();
                         }
                         return;
                     }
                     if (name.startsWith("Mode: ")) {
-                        ShopSession s = ServersideShopsMod.SESSIONS.get(sp.getUuid());
                         if (s != null && s.category != null) {
-                            ShopSession.Mode newMode = (s.mode == ShopSession.Mode.BUY) ? ShopSession.Mode.SELL : ShopSession.Mode.BUY;
-                            ShopGui.openCategory(sp, s.category, s.page, newMode);
+                            s.mode = (s.mode == ShopSession.Mode.BUY) ? ShopSession.Mode.SELL : ShopSession.Mode.BUY;
+                            ServersideShopsMod.SESSIONS.put(sp.getUuid(), s);
+                            fillCategory(menuInventory, s.category, s.page, s.mode);
+                            this.sendContentUpdates();
                         }
                         return;
                     }
@@ -145,7 +180,7 @@ public class ShopGui {
                     int space = name.indexOf(' ');
                     if (space > 0) {
                         String itemId = name.substring(0, space);
-                        if (session != null && session.mode == ShopSession.Mode.SELL) {
+                        if (s != null && s.mode == ShopSession.Mode.SELL) {
                             ShopActions.sell(sp, itemId, 1);
                         } else {
                             ShopActions.buy(sp, itemId, 1);
@@ -153,7 +188,7 @@ public class ShopGui {
                         return;
                     }
                 }
-                return; // cancel menu item pickup
+                return; // prevent taking menu items
             }
             super.onSlotClick(slotIndex, button, actionType, player);
         }
