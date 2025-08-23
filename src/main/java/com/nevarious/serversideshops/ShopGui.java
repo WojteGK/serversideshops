@@ -1,11 +1,14 @@
 package com.nevarious.serversideshops;
 
+import com.mojang.authlib.GameProfile;
 import net.minecraft.component.DataComponentTypes;
+import net.minecraft.component.type.ProfileComponent;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.inventory.Inventory;
 import net.minecraft.inventory.SimpleInventory;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
 import net.minecraft.registry.Registries;
 import net.minecraft.screen.GenericContainerScreenHandler;
 import net.minecraft.screen.ScreenHandlerType;
@@ -40,7 +43,7 @@ public class ShopGui {
 
     public static void openCategory(ServerPlayerEntity player, String categoryId, int page, ShopSession.Mode mode) {
         // Keep the same handler/screen; just fill it
-        if (!(player.currentScreenHandler instanceof ShopScreenHandler ssh)) {
+        if (!(player.currentScreenHandler instanceof ShopScreenHandler)) {
             openCategories(player); // fallback if somehow not open
         }
         ServersideShopsMod.SESSIONS.put(player.getUuid(),
@@ -61,11 +64,15 @@ public class ShopGui {
             String[] icon = cat.icon.split(":");
             Item iconItem = Registries.ITEM.get(Identifier.of(icon[0], icon[1]));
             ItemStack stack = new ItemStack(iconItem);
-            stack.set(DataComponentTypes.CUSTOM_NAME, Text.literal("Category: " + cat.name));
+            stack.set(DataComponentTypes.CUSTOM_NAME,
+                    Text.literal("Category: " + cat.name).styled(st -> st.withBold(true).withItalic(false)));
             inv.setStack(i++, stack);
         }
-        // nav & hint row
-        inv.setStack(53, navStack("Close"));
+
+        // Close button (barrier) — bold, dark red
+        inv.setStack(53, iconBarrier(
+                Text.literal("Close").styled(s -> s.withBold(true).withItalic(false).withColor(0xAA0000))
+        ));
     }
 
     private static void fillCategory(Inventory inv, String categoryId, int page, ShopSession.Mode mode) {
@@ -90,22 +97,59 @@ public class ShopGui {
             Item iconItem = Registries.ITEM.get(Identifier.of(icon[0], icon[1]));
             ItemStack stack = new ItemStack(iconItem);
             long price = (mode == ShopSession.Mode.BUY) ? def.price_buy : (def.price_sell == null ? 0 : def.price_sell);
-            stack.set(DataComponentTypes.CUSTOM_NAME, Text.literal(itemId + " $" + price));
+            stack.set(DataComponentTypes.CUSTOM_NAME,
+                    Text.literal(itemId + " $" + price).styled(s -> s.withBold(true).withItalic(false)));
             inv.setStack(slot++, stack);
         }
 
-        // Nav row
-        inv.setStack(45, navStack("« Prev"));
-        inv.setStack(46, navStack("Back"));
-        inv.setStack(52, navStack(mode == ShopSession.Mode.BUY ? "Mode: BUY" : "Mode: SELL"));
-        inv.setStack(53, navStack("Next »"));
+        // Nav row — bold + colored
+        inv.setStack(45, iconMHF("MHF_ArrowLeft",
+                Text.literal("« Prev").styled(s -> s.withBold(true).withItalic(false).withColor(0xFF5555)))); // red
+        inv.setStack(46, iconMHF("MHF_Backward",
+                Text.literal("Back").styled(s -> s.withBold(true).withItalic(false).withColor(0xFFFF55))));   // yellow
+
+        ItemStack modeStack = (mode == ShopSession.Mode.BUY)
+                ? iconWool(true, Text.literal("Mode: BUY").styled(s -> s.withBold(true).withItalic(false).withColor(0x55FF55)))  // green
+                : iconWool(false, Text.literal("Mode: SELL").styled(s -> s.withBold(true).withItalic(false).withColor(0xFF5555))); // red
+        inv.setStack(52, modeStack);
+
+        inv.setStack(53, iconMHF("MHF_ArrowRight",
+                Text.literal("Next »").styled(s -> s.withBold(true).withItalic(false).withColor(0x55FF55)))); // green
     }
 
-    private static ItemStack navStack(String name) {
-        ItemStack paper = new ItemStack(Registries.ITEM.get(Identifier.of("minecraft", "paper")));
-        paper.set(DataComponentTypes.CUSTOM_NAME, Text.literal(name));
-        return paper;
+    // ----- Icon helpers -----
+
+    private static ItemStack iconWool(boolean green, Text label) {
+        ItemStack stack = new ItemStack(green ? Items.GREEN_WOOL : Items.RED_WOOL);
+        stack.set(DataComponentTypes.CUSTOM_NAME, label);
+        return stack;
     }
+
+    private static ItemStack iconBarrier(Text label) {
+        ItemStack stack = new ItemStack(Items.BARRIER);
+        stack.set(DataComponentTypes.CUSTOM_NAME, label);
+        return stack;
+    }
+
+    private static ItemStack iconMHF(String mhfName, Text label) {
+        try {
+            // Stable "offline" UUID (no network needed)
+            java.util.UUID id = java.util.UUID.nameUUIDFromBytes(("OfflinePlayer:" + mhfName)
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            GameProfile gp = new GameProfile(id, mhfName);
+    
+            ItemStack head = new ItemStack(Items.PLAYER_HEAD);
+            head.set(DataComponentTypes.CUSTOM_NAME, label);
+            head.set(DataComponentTypes.PROFILE, new ProfileComponent(gp));
+            return head;
+        } catch (Exception e) {
+            // Fallback icon if profile fails (e.g., strict offline mode)
+            ItemStack fallback = new ItemStack(Items.ARROW);
+            fallback.set(DataComponentTypes.CUSTOM_NAME, label);
+            return fallback;
+        }
+    }
+    
 
     // ----- ScreenHandler that keeps a reference to the menu inventory -----
 
@@ -136,7 +180,6 @@ public class ShopGui {
                             if (c.name.equals(catName)) { catId = c.id; break; }
                         }
                         if (catId != null) {
-                            // mutate same inventory (no reopen)
                             ServersideShopsMod.SESSIONS.put(sp.getUuid(), new ShopSession(sp.getUuid(), catId, 0, ShopSession.Mode.BUY));
                             fillCategory(menuInventory, catId, 0, ShopSession.Mode.BUY);
                             this.sendContentUpdates();
@@ -167,6 +210,7 @@ public class ShopGui {
                         }
                         return;
                     }
+                    if ("Close".equals(name)) { sp.closeHandledScreen(); return; }
                     if (name.startsWith("Mode: ")) {
                         if (s != null && s.category != null) {
                             s.mode = (s.mode == ShopSession.Mode.BUY) ? ShopSession.Mode.SELL : ShopSession.Mode.BUY;
@@ -188,12 +232,8 @@ public class ShopGui {
                         return;
                     }
                 }
-                return; // prevent taking menu items
+            return;
             }
-            super.onSlotClick(slotIndex, button, actionType, player);
         }
-
-        @Override
-        public boolean canUse(net.minecraft.entity.player.PlayerEntity player) { return true; }
     }
 }

@@ -22,9 +22,12 @@ public class ShopActions {
             return 0;
         }
 
-        String nbtPart = (def.nbt != null && !def.nbt.isEmpty()) ? def.nbt : "{}";
-        String cmd = "give " + player.getGameProfile().getName() + " " + def.icon + nbtPart + " " + qty;
-
+        String base = def.icon;
+        String comps = legacyNbtToComponents(def.nbt);
+        String cmd = comps.isEmpty()
+                ? ("give " + player.getGameProfile().getName() + " " + base + " " + qty)
+                : ("give " + player.getGameProfile().getName() + " " + base + comps + " " + qty);
+        
         MinecraftServer srv = player.getServer();
         srv.getCommandManager().executeWithPrefix(srv.getCommandSource().withLevel(2), cmd);
 
@@ -74,4 +77,52 @@ public class ShopActions {
             }
         }
     }
+    // ShopActions.java – replace legacyNbtToComponents with a version that quotes keys
+    private static String legacyNbtToComponents(String legacy) {
+        if (legacy == null || legacy.isBlank()) return "";
+    
+        // custom_name (display.Name:'{...}')
+        String customNameComp = "";
+        java.util.regex.Matcher nameM = java.util.regex.Pattern
+                .compile("display:\\{\\s*Name:'(\\{.*?\\})'\\s*\\}", java.util.regex.Pattern.CASE_INSENSITIVE)
+                .matcher(legacy);
+        if (nameM.find()) {
+            String json = nameM.group(1).replace("\\\"", "\"");
+            customNameComp = ",custom_name='" + json + "'";
+        }
+    
+        // Enchantments list
+        java.util.Map<String,Integer> ench = new java.util.LinkedHashMap<>();
+        java.util.regex.Matcher enchM = java.util.regex.Pattern
+                .compile("Enchantments:\\[([^\\]]+)\\]", java.util.regex.Pattern.CASE_INSENSITIVE)
+                .matcher(legacy);
+        if (enchM.find()) {
+            String list = enchM.group(1);
+            java.util.regex.Matcher each = java.util.regex.Pattern
+                .compile("\\{\\s*id:\\\"?([a-z0-9_:\\-]+)\\\"?\\s*,\\s*lvl:(\\d+)s?\\s*\\}")
+                .matcher(list);
+            while (each.find()) {
+                String id = each.group(1);
+                int lvl = Integer.parseInt(each.group(2));
+                ench.put(id, lvl);
+            }
+        }
+    
+        String enchComp = "";
+        if (!ench.isEmpty()) {
+            StringBuilder levels = new StringBuilder();
+            boolean first = true;
+            for (var e : ench.entrySet()) {
+                if (!first) levels.append(",");
+                // IMPORTANT: quote the key
+                levels.append("\"").append(e.getKey()).append("\":").append(e.getValue());
+                first = false;
+            }
+            enchComp = "enchantments={levels:{"+levels+"}}";
+        }
+    
+        if (enchComp.isEmpty() && customNameComp.isEmpty()) return "";
+        return "[" + enchComp + customNameComp + "]";
+    }
+
 }
