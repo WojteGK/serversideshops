@@ -77,21 +77,21 @@ public class ShopActions {
             }
         }
     }
-    // ShopActions.java – replace legacyNbtToComponents with a version that quotes keys
     private static String legacyNbtToComponents(String legacy) {
         if (legacy == null || legacy.isBlank()) return "";
-    
-        // custom_name (display.Name:'{...}')
-        String customNameComp = "";
+
+        java.util.List<String> components = new java.util.ArrayList<>();
+
+        // 1. custom_name (display.Name:'{...}')
         java.util.regex.Matcher nameM = java.util.regex.Pattern
                 .compile("display:\\{\\s*Name:'(\\{.*?\\})'\\s*\\}", java.util.regex.Pattern.CASE_INSENSITIVE)
                 .matcher(legacy);
         if (nameM.find()) {
             String json = nameM.group(1).replace("\\\"", "\"");
-            customNameComp = ",custom_name='" + json + "'";
+            components.add("custom_name='" + json + "'");
         }
-    
-        // Enchantments list
+
+        // 2. Enchantments list
         java.util.Map<String,Integer> ench = new java.util.LinkedHashMap<>();
         java.util.regex.Matcher enchM = java.util.regex.Pattern
                 .compile("Enchantments:\\[([^\\]]+)\\]", java.util.regex.Pattern.CASE_INSENSITIVE)
@@ -102,27 +102,41 @@ public class ShopActions {
                 .compile("\\{\\s*id:\\\"?([a-z0-9_:\\-]+)\\\"?\\s*,\\s*lvl:(\\d+)s?\\s*\\}")
                 .matcher(list);
             while (each.find()) {
-                String id = each.group(1);
-                int lvl = Integer.parseInt(each.group(2));
-                ench.put(id, lvl);
+                ench.put(each.group(1), Integer.parseInt(each.group(2)));
             }
         }
-    
-        String enchComp = "";
+
+        // 3. HideFlags
+        boolean hide = false;
+        java.util.regex.Matcher hideM = java.util.regex.Pattern
+                .compile("HideFlags:\\s*([1-9]\\d*|true)", java.util.regex.Pattern.CASE_INSENSITIVE)
+                .matcher(legacy);
+        if (hideM.find()) {
+            hide = true;
+        }
+
+        // 4. Build Enchantment Component
         if (!ench.isEmpty()) {
             StringBuilder levels = new StringBuilder();
             boolean first = true;
             for (var e : ench.entrySet()) {
                 if (!first) levels.append(",");
-                // IMPORTANT: quote the key
                 levels.append("\"").append(e.getKey()).append("\":").append(e.getValue());
                 first = false;
             }
-            enchComp = "enchantments={levels:{"+levels+"}}";
+
+            if (hide) {
+                // Użyj formatu złożonego, jeśli musimy ukryć tooltip
+                components.add("enchantments={levels:{" + levels + "}, show_in_tooltip:false}");
+            } else {
+                // Użyj formatu prostego
+                components.add("enchantments={" + levels + "}");
+            }
         }
-    
-        if (enchComp.isEmpty() && customNameComp.isEmpty()) return "";
-        return "[" + enchComp + customNameComp + "]";
+
+        // 5. Złóż finalny string
+        if (components.isEmpty()) return "";
+        return "[" + String.join(",", components) + "]";
     }
 
 }
